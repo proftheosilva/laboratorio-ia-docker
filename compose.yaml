@@ -1,6 +1,8 @@
 name: laboratorio-ia-docker
 
 services:
+  # Estado inicial: somente n8n. Acrescente os apps clonados conforme o README.
+  # Cada app usa seu proprio Dockerfile, dependencias e env_file.
   n8n:
     image: n8nio/n8n:2.44.5
     container_name: laboratorio-n8n

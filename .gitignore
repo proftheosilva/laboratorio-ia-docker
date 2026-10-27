@@ -1,24 +1,32 @@
-# Segredos locais
+# Segredos (cada app tambem deve ter regras no proprio repositorio)
 .env
 .env.*
 !.env.example
 *.pem
 *.key
 
-# Dados de aula ficam no computador, não no Git
-/dados/documentos/*
+# Apps clonados sao repositorios independentes.
+/apps/*/
+
+# Dados de aula: preservar apenas os diretorios e seus marcadores.
+/dados/documentos/**
 !/dados/documentos/raw/
 !/dados/documentos/silver/
 !/dados/documentos/gold/
+!/dados/documentos/raw/.gitkeep
+!/dados/documentos/silver/.gitkeep
+!/dados/documentos/gold/.gitkeep
 
-# Dados e backups locais do n8n
+# Estado e backups locais
 /n8n_data/
 /backups/
 *.backup
 
-# Dependências, caches e build
+# Dependencias, caches e builds
 node_modules/
 .venv/
+.venv-*/
+venv/
 __pycache__/
 *.py[cod]
 .next/

@@ -1,11 +1,16 @@
-# Apps da formação
+# Aplicações incorporadas pelos alunos
 
-Cada projeto desenvolvido em aula fica em uma pasta própria dentro de `apps/`, por exemplo `apps/rag`, `apps/mcp`, `apps/agente-a` e `apps/agente-b`.
+Esta pasta recebe os projetos reais desenvolvidos e testados em aula. O template inicia somente o n8n.
 
-Cada app declara suas dependências e pode ter seu próprio Dockerfile. Python e Node.js usam imagens separadas; `compose.yaml` define como se comunicam na rede comum `aula`. Serviços de banco continuam remotos (Supabase), portanto não há contêiner de banco nesta composição.
+1. Clone seu repositório em `apps/NOME_DO_PROJETO`.
+2. Restaure o `.env` privado na raiz desse app.
+3. Crie ou adapte o Dockerfile e o .dockerignore dentro do projeto.
+4. Mantenha dependências no requirements.txt do projeto Python ou no package.json e lockfile do projeto Node.js.
+5. Acrescente seu serviço no compose.yaml da raiz e conecte-o à rede aula.
+6. Confira com `docker compose config --quiet` e inicie com `docker compose up -d --build`.
 
-Não coloque ambientes `venv`, `node_modules`, `.env`, tokens ou documentos de alunos dentro do Git. Os arquivos de dados de aula ficam em `dados/documentos` e são montados nos serviços que precisam deles.
+Os exemplos completos de MCP, backend RAG e Next.js estão no [README principal](../README.md).
 
-## Dependências Python previstas
+Não há Dockerfile genérico nem lista central de pacotes. Um projeto com frontend e backend pode usar dois serviços e dois Dockerfiles.
 
-O RAG instala FastAPI/Uvicorn, FastEmbed, PDFPlumber/PyPDF, tiktoken e python-dotenv. MCP instala o SDK `mcp` e python-dotenv. Agentes poderão instalar LangChain e seus conectores somente quando essa etapa for adicionada. A lista final deve acompanhar as dependências reais de cada app, sem exigir bibliotecas que não usa.
+Cada app mantém seu próprio repositório. Os diretórios clonados são ignorados pelo Git do template por padrão. As regras do laboratório não substituem o .gitignore de cada aplicação.
