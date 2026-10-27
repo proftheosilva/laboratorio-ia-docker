@@ -341,20 +341,140 @@ Essas pastas não processam arquivos por si mesmas. No exercício RAG, o própri
 
 Local File Trigger está liberado no n8n inicial; Execute Command permanece excluído. Verifique eventos em pastas Windows compartilhadas. Um observador que chama Webhook é alternativa. Controle eventos repetidos antes da ingestão.
 
-## 11. Persistência e mudança de computador
+## 11. Persistência, backup e mudança de computador
 
-O volume n8n_data guarda workflows, credenciais e estado **na máquina local**. Não acompanha git clone. Exporte workflows revisados e configure credenciais no novo ambiente, ou restaure um backup completo com sua chave de criptografia.
+### Onde o n8n guarda os dados
 
-Em outro computador:
+No `compose.yaml` inicial, o volume nomeado `n8n_data` é montado em `/home/node/.n8n` dentro do contêiner. Na configuração padrão com SQLite, o arquivo `database.sqlite` guarda workflows, credenciais criptografadas, dados de execução e outras informações da instância. Se o n8n estiver configurado para PostgreSQL, o banco fica fora desse arquivo e precisa de backup próprio. [Banco de dados do n8n](https://docs.n8n.io/deploy/host-n8n/configure-n8n/choose-n8ns-database/).
 
-1. Instale e inicie Docker Desktop.
-2. Clone o template ou seu laboratório personalizado.
-3. Clone os apps e restaure seus .env e Dockerfiles.
-4. Restaure suas entradas no Compose e os dados do pendrive/armazenamento privado.
-5. Execute docker compose up -d --build.
-6. Importe workflows e configure credenciais, ou restaure o estado completo do n8n.
+No computador do professor, o Docker Desktop com WSL apresentou este caminho no Windows:
 
-Imagens, dependências e modelos precisam ser baixados na primeira máquina nova. Dados de aula não ficam no Git.
+~~~text
+\\wsl.localhost\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes\laboratorio-ia-docker_n8n_data\_data
+~~~
+
+Ali está o `database.sqlite` do caso observado. **Esse caminho é apenas um exemplo**: versão do Docker Desktop, configuração e nome do projeto Compose podem alterá-lo. `n8n_data` é o nome no YAML; `laboratorio-ia-docker_n8n_data` é o nome do volume que o Docker gerou para esse projeto.
+
+Prefira acessar o conteúdo pelo próprio Docker para realizar o backup, em vez de modificar diretamente a área interna do Docker Desktop no WSL. Um `git clone` não copia o volume. O procedimento usa um contêiner auxiliar para ler o volume, seguindo a abordagem de [backup de volumes do Docker](https://docs.docker.com/engine/storage/volumes/#back-up-restore-or-migrate-data-volumes).
+
+### Por que copiar o volume inteiro
+
+O banco SQLite não é necessariamente o único arquivo necessário. O n8n gera uma chave de criptografia na pasta `.n8n`; essa chave é usada para proteger as credenciais guardadas no banco. Copiar apenas `database.sqlite` para outra instância pode recuperar workflows sem permitir o uso das credenciais. Se a instalação usa `N8N_ENCRYPTION_KEY` definida fora do volume, guarde essa mesma chave separadamente em local privado e configure-a no destino. [Chave de criptografia do n8n](https://docs.n8n.io/deploy/host-n8n/configure-n8n/basic-configuration/configuration-examples/set-a-custom-encryption-key/).
+
+O SQLite também pode manter arquivos auxiliares, como `database.sqlite-wal`, quando o modo WAL está ativo. Para uma cópia consistente neste laboratório, **aguarde as execuções terminarem, pare o n8n e copie o volume completo**, incluindo arquivos auxiliares que existam. [SQLite: arquivo WAL](https://www.sqlite.org/wal.html).
+
+O backup do volume pode conter **workflows, dados de execução, credenciais criptografadas e a própria chave**. O arquivo `.tar.gz` apenas compacta: **ele não é criptografado**. Trate-o como dado sensível: use armazenamento privado com proteção adequada; não publique no Git, em repositório público ou no grupo da turma. A pasta `backups/` do template está no `.gitignore`.
+
+### Criar uma cópia no computador de origem
+
+O exemplo abaixo usa PowerShell na pasta que contém o `compose.yaml` e pressupõe o serviço `n8n` deste template, com SQLite e um único contêiner escritor. Aguarde os workflows em execução terminarem. Se houver outros contêineres ou processos que escrevem nesse mesmo volume, pare-os também antes da cópia.
+
+**O comando de parada abaixo interrompe o serviço n8n**; execute-o quando puder interromper a automação. O Docker Desktop precisa estar iniciado. A primeira execução pode baixar a imagem auxiliar `alpine:3.20`.
+
+~~~powershell
+# Pare somente o n8n e aguarde o encerramento.
+docker compose stop -t 60 n8n
+if ($LASTEXITCODE -ne 0) { throw "Falha ao parar o n8n. Backup não iniciado." }
+
+# Descubra o contêiner, confirme que está parado e identifique o volume real.
+$n8nContainerId = docker compose ps --all --quiet n8n
+if (-not $n8nContainerId) { throw "Contêiner n8n não encontrado neste Compose." }
+
+$n8nEstado = docker inspect --format '{{.State.Status}}' $n8nContainerId
+if ($LASTEXITCODE -ne 0 -or $n8nEstado -notin @("exited", "created")) {
+    throw "O n8n não está parado. Verifique o estado antes de copiar."
+}
+
+$n8nMontagensJson = docker inspect --format '{{json .Mounts}}' $n8nContainerId
+if ($LASTEXITCODE -ne 0) { throw "Não foi possível inspecionar as montagens do n8n." }
+$n8nMontagens = $n8nMontagensJson | ConvertFrom-Json
+$n8nVolume = ($n8nMontagens | Where-Object { $_.Destination -eq "/home/node/.n8n" -and $_.Type -eq "volume" }).Name
+if ($LASTEXITCODE -ne 0 -or -not $n8nVolume) {
+    throw "Volume n8n_data não encontrado; confira a montagem do Compose."
+}
+
+# Crie um arquivo com horário no nome, evitando substituir backups anteriores.
+$backupDir = Join-Path (Get-Location).Path "backups"
+New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+$backupNome = "n8n-" + (Get-Date -Format "yyyyMMdd-HHmmss-fff") + ".tar.gz"
+if (Test-Path -LiteralPath (Join-Path $backupDir $backupNome)) {
+    throw "O arquivo de backup já existe. Escolha outro nome."
+}
+
+# O volume de origem é montado somente para leitura.
+docker run --rm --mount "type=volume,src=$n8nVolume,dst=/origem,readonly" --mount "type=bind,src=$backupDir,dst=/backup" alpine:3.20 tar -czf "/backup/$backupNome" -C /origem .
+if ($LASTEXITCODE -ne 0) { throw "Falha na criação do backup. O n8n continua parado." }
+
+# Confirme que o arquivo pode ser lido e liste seus nomes, sem exibir conteúdo.
+docker run --rm --mount "type=bind,src=$backupDir,dst=/backup,readonly" alpine:3.20 tar -tzf "/backup/$backupNome"
+if ($LASTEXITCODE -ne 0) { throw "Falha ao ler o backup. O n8n continua parado." }
+
+Write-Host "Backup criado em: $backupDir\$backupNome"
+docker compose start n8n
+if ($LASTEXITCODE -ne 0) { throw "Backup criado, mas não foi possível iniciar o n8n." }
+~~~
+
+A listagem deve incluir `./database.sqlite` e, na configuração padrão com chave gerada pelo n8n, `./config`. A listagem verifica que o arquivo pode ser lido; **ela não substitui um teste de restauração**. Se o comando falhar, confira a mensagem antes de reiniciar o n8n com `docker compose start n8n`.
+
+Copie o `.tar.gz` para o pendrive ou armazenamento privado. Copie também, separadamente, os dados necessários de `dados/documentos`, os projetos em `apps`, seus `.env` e qualquer chave definida fora do volume. Esses itens **não estão incluídos** no backup de `n8n_data`.
+
+### Restaurar em outro Docker Desktop
+
+Este procedimento restaura o **estado completo** da instância, inclusive contas, workflows e credenciais criptografadas. Use apenas um arquivo criado por você e de origem confiável. Se o computador de destino já tiver workflows ou credenciais que precise preservar, faça backup deles primeiro: o procedimento abaixo se recusa a extrair em um volume que já contenha arquivos.
+
+Se a intenção for levar somente os workflows, outra opção é exportá-los pela interface do n8n e configurar as credenciais novamente no destino. A exportação de workflows não é uma cópia completa do banco nem das credenciais.
+
+1. Instale e inicie o Docker Desktop no computador de destino. Clone o template e entre na sua pasta no PowerShell.
+2. Crie uma pasta local `backups` e copie o `.tar.gz` para ela por um meio privado.
+3. No script abaixo, substitua **apenas** o nome fictício de `$backupNome` pelo nome real do seu arquivo. Use a mesma versão da imagem n8n usada ao criar o backup; avalie atualizações posteriormente.
+
+Ao iniciar a instância restaurada, workflows que estavam ativos podem disparar novamente. Antes de executar o último comando, revise se há gatilhos ou integrações que podem gerar efeitos duplicados nas duas máquinas.
+
+~~~powershell
+$backupNome = "n8n-AAAAMMDD-HHMMSS-mmm.tar.gz"
+$backupDir = Join-Path (Get-Location).Path "backups"
+if (-not (Test-Path -LiteralPath (Join-Path $backupDir $backupNome) -PathType Leaf)) {
+    throw "Arquivo de backup não encontrado na pasta backups."
+}
+
+# Pare o serviço se já existir e crie o contêiner e o volume sem iniciar o n8n.
+docker compose stop -t 60 n8n
+if ($LASTEXITCODE -ne 0) { throw "Falha ao parar o n8n do destino." }
+docker compose create n8n
+if ($LASTEXITCODE -ne 0) { throw "Falha ao criar o contêiner do destino." }
+
+$n8nContainerId = docker compose ps --all --quiet n8n
+if (-not $n8nContainerId) { throw "Contêiner n8n do destino não encontrado." }
+$n8nEstado = docker inspect --format '{{.State.Status}}' $n8nContainerId
+if ($LASTEXITCODE -ne 0 -or $n8nEstado -notin @("exited", "created")) {
+    throw "O n8n do destino não está parado."
+}
+$n8nMontagensJson = docker inspect --format '{{json .Mounts}}' $n8nContainerId
+if ($LASTEXITCODE -ne 0) { throw "Não foi possível inspecionar as montagens do n8n." }
+$n8nMontagens = $n8nMontagensJson | ConvertFrom-Json
+$n8nVolume = ($n8nMontagens | Where-Object { $_.Destination -eq "/home/node/.n8n" -and $_.Type -eq "volume" }).Name
+if ($LASTEXITCODE -ne 0 -or -not $n8nVolume) {
+    throw "Volume do destino não encontrado."
+}
+
+# Confira o volume antes de extrair. Nenhum outro processo deve escrever nele.
+$conteudoVolume = docker run --rm --mount "type=volume,src=$n8nVolume,dst=/destino,readonly" alpine:3.20 ls -A /destino
+if ($LASTEXITCODE -ne 0) { throw "Não foi possível conferir o volume do destino." }
+if ($conteudoVolume) { throw "ABORTADO: o volume de destino não está vazio." }
+
+# O volume vazio recebe o backup; nenhum arquivo existente é apagado.
+docker run --rm --mount "type=volume,src=$n8nVolume,dst=/destino" --mount "type=bind,src=$backupDir,dst=/backup,readonly" alpine:3.20 tar -xzf "/backup/$backupNome" -C /destino
+if ($LASTEXITCODE -ne 0) { throw "Restauração interrompida. O n8n continua parado; confira o volume e o arquivo." }
+
+docker compose start n8n
+if ($LASTEXITCODE -ne 0) { throw "Volume restaurado, mas não foi possível iniciar o n8n." }
+~~~
+
+Se o volume não estiver vazio, **não o apague para forçar esse procedimento**: preserve o estado existente e planeje a migração. Se uma chave externa `N8N_ENCRYPTION_KEY` era usada na origem, configure a mesma chave no destino sem publicá-la.
+
+Abra `http://localhost:5678`, entre com a conta restaurada e confira workflows, uma credencial de teste e os caminhos utilizados. Os workflows que estavam ativos no backup podem voltar a executar quando o n8n iniciar; revise gatilhos, URLs e possíveis efeitos duplicados antes de colocar as duas instâncias em operação.
+
+Os dados compartilhados em `dados/documentos` e os projetos em `apps` precisam ser restaurados separadamente. Reconecte integrações que dependam de permissões ou caminhos da máquina anterior. Ao atualizar o n8n, siga o procedimento de atualização da versão escolhida.
 
 ## 12. Git do laboratório e Git dos apps
 
